@@ -46,6 +46,8 @@ def main():
     key = ''
     print("Press 'q' to quit the video feed.")
 
+    # Create named window
+
     fps_values = []
     while key != ord('q'):
         start_time = time.time()  # Start time for FPS calculation
@@ -72,14 +74,8 @@ def main():
                                   retina_masks=True,
                                   tracker="ultralytics/cfg/trackers/bytetrack.yaml")
 
-
-            #boxes = results[0].boxes
-            #class_ids = boxes.cls
-            #print("Class_ids", class_ids)
-
             # Visualize the results on the frame, results is a class for storing the results of the detection
             annotated_frame = results[0].plot(line_width=2, font_size=18)
-
 
             # Display the distance for each detected object
             for box in results[0].boxes:
