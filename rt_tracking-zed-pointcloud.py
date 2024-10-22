@@ -7,6 +7,14 @@ from ultralytics import YOLO
 import open3d as o3d
 import concurrent.futures
 
+# Define a color map for different classes
+color_map = {
+    0: [15, 82, 186],  # Person - sapphire
+    39: [255, 255, 0],  # Bottle - yellow
+    41: [63, 224, 208],  # Cup - turquoise
+    64: [0, 0, 128],  # Mouse - navy
+    66: [255, 0, 0]  # Keyboard - red
+}
 
 def get_3d_points_torch(mask_indices, depth_map, cx, cy, fx, fy, device='cuda'):
     """Convert 2D mask pixel coordinates to 3D points using depth values on GPU."""
@@ -36,7 +44,7 @@ def get_3d_points_torch(mask_indices, depth_map, cx, cy, fx, fy, device='cuda'):
 
 def main():
     # Create a smaller coordinate frame
-    coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05, origin=[0, 0, 0])
+    coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
 
     # Check if CUDA is available and set the device accordingly
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -74,16 +82,29 @@ def main():
     key = ''
     print("Press 'q' to quit the video feed.")
 
-    # Initialize Open3D visualizer
-    vis = o3d.visualization.Visualizer()
+    # Initialize Open3D visualizer with key callbacks
+    vis = o3d.visualization.VisualizerWithKeyCallback()
     vis.create_window(width=1280, height=720)
     vis.add_geometry(coordinate_frame)
+
+    # Get view control to modify the camera view
+    view_control = vis.get_view_control()
+
+    # Define callback functions for key presses
+    def reset_view(vis):
+        vis.get_view_control().reset()  # Correct method to reset view
+
+    def close_visualizer(vis):
+        vis.destroy_window()
+
+    # Bind keys to functions
+    vis.register_key_callback(ord("R"), reset_view)  # Press 'R' to reset view
+    vis.register_key_callback(ord("Q"), close_visualizer)  # Press 'Q' to quit
 
     # Create named window with the ability to resize
     cv2.namedWindow("YOLO11 Segmentation+Tracking", cv2.WINDOW_NORMAL)
 
     fps_values = []
-    frame_count = 0  # To control how frequently we update Open3D
     while key != ord('q'):
         start_time = time.time()  # Start time for FPS calculation
 
@@ -108,7 +129,7 @@ def main():
                                               source=frame,
                                               imgsz=640,
                                               max_det=20,
-                                              classes = [0,39,41,64,66],
+                                              classes=[0, 39, 41, 64, 66],
                                               half=True,
                                               persist=True,
                                               retina_masks=True,
@@ -118,7 +139,6 @@ def main():
 
                 future_depth = executor.submit(zed.retrieve_measure, depth, sl.MEASURE.DEPTH)
                 results = future_yolo.result()  # Get YOLO results
-                zed_depth = future_depth.result()  # Get depth map
 
             # Convert the ZED depth map to a NumPy array
             zed_depth_np = depth.get_data()
@@ -129,12 +149,13 @@ def main():
             # Visualize the results on the frame
             annotated_frame = results[0].plot(line_width=2, font_size=18)
 
-            # Get the mask and bounding boxes for the detected objects
+            # Get the mask and class IDs for the detected objects
             masks = results[0].masks
+            class_ids = results[0].boxes.cls.cpu().numpy()  # Class IDs
             point_clouds = []
 
             # Process each mask
-            for mask in masks.data:
+            for i, mask in enumerate(masks.data):
                 mask = mask.cpu().numpy()  # Convert mask to numpy array
                 mask_indices = np.argwhere(mask > 0)  # Get indices of mask pixel
 
@@ -150,34 +171,29 @@ def main():
                     point_clouds.append(points_3d.cpu().numpy())  # Move points back to CPU
 
             # Visualize the 3D point clouds
-            if point_clouds and frame_count % 10 == 0:  # Only update visualization every 10 frames
-                # Create Open3D point cloud objects
-                o3d_pcds = [o3d.geometry.PointCloud(o3d.utility.Vector3dVector(pc)) for pc in point_clouds]
+            if point_clouds:  # Update visualization every frame
+                vis.clear_geometries()
 
-                # Transformation matrix for 180° rotation around the x-axis
-                transformation_matrix = np.array([[1, 0, 0, 0],
-                                                  [0, -1, 0, 0],
-                                                  [0, 0, -1, 0],
-                                                  [0, 0, 0, 1]])
+                for i, pc in enumerate(point_clouds):
+                    pcd = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(pc))
+                    class_id = int(class_ids[i])  # Get the class ID of the object
 
-                # Apply the transformation to each point cloud
-                for pcd in o3d_pcds:
-                    pcd.transform(transformation_matrix)
-
-                # Assign colors to each point cloud for distinction
-                for pcd, color in zip(o3d_pcds, [[1, 0, 0], [0, 1, 0], [0, 0, 1]]):  # Assign different colors
+                    # Assign color based on the class ID using the color_map
+                    color = np.array(color_map.get(class_id, [1, 1, 1])) / 255.0  # Normalize to [0, 1]
                     pcd.paint_uniform_color(color)
 
-                # Update the visualizer with new point clouds
-                vis.clear_geometries()
-                vis.add_geometry(coordinate_frame)
-                for pcd in o3d_pcds:
+                    # Transformation matrix for 180° rotation around the x-axis
+                    transformation_matrix = np.array([[1, 0, 0, 0],
+                                                      [0, -1, 0, 0],
+                                                      [0, 0, -1, 0],
+                                                      [0, 0, 0, 1]])
+                    pcd.transform(transformation_matrix)
+
                     vis.add_geometry(pcd)
+
+                vis.add_geometry(coordinate_frame)
                 vis.poll_events()
                 vis.update_renderer()
-
-            # Increment frame count
-            frame_count += 1
 
             # Calculate FPS
             fps = 1.0 / (time.time() - start_time)
