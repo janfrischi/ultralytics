@@ -3,6 +3,8 @@ import pyzed.sl as sl
 import cv2
 import time
 import torch
+from shapely.constructive import centroid
+
 from ultralytics import YOLO
 import open3d as o3d
 import random
@@ -18,7 +20,7 @@ color_map = {
 }
 
 def erode_mask(mask, iterations=1):
-    kernel = np.ones((4, 4), np.uint8)
+    kernel = np.ones((8, 8), np.uint8)
     eroded_mask = cv2.erode(mask, kernel, iterations=iterations)
     return eroded_mask
 
@@ -53,11 +55,18 @@ def random_sample_pointcloud(pc, fraction):
     indices = random.sample(range(n_points), sample_size)
     return pc[indices]
 
+def calculate_centroid(point_cloud):
+    return np.mean(point_cloud, axis=0)
+
 def main():
 
     # Create a coordinate frame
     coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.05, origin=[0, 0, 0])
-
+    transformation_matrix = np.array([[1, 0, 0, 0],
+                                      [0, -1, 0, 0],
+                                      [0, 0, -1, 0],
+                                      [0, 0, 0, 1]])
+    coordinate_frame.transform(transformation_matrix)
     # Check if CUDA is available and set the device accordingly
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
@@ -171,7 +180,13 @@ def main():
                     points_3d = get_3d_points_torch(mask_indices, depth_map, cx, cy, fx, fy)
 
                 if points_3d.size(0) > 0:
-                    point_clouds.append(points_3d.cpu().numpy())
+                    point_cloud_np = points_3d.cpu().numpy()
+                    point_clouds.append(point_cloud_np)
+
+                    # Calculate the centroid of the point cloud
+                    centroid = calculate_centroid(point_cloud_np)
+                    class_id = int(class_ids[i])
+                    print(f"Class ID: {class_id}, CentroidXYZ-Coords: {centroid}")
 
             # Visualize the 3D point clouds every 'update_frequency' frames
             if point_clouds and frame_count % update_frequency == 0:
